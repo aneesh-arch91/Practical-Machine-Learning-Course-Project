@@ -1,0 +1,165 @@
+---
+title: "**Practical Machine Learning Course Project**"
+author: Aneesh
+output:
+  html_document:
+    highlight: pygments
+    theme: cerulean
+    keep_md: true
+    toc: true
+---
+
+# Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively.
+These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks.
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here:
+http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har
+ (see the section on the Weight Lifting Exercise Dataset).
+
+# Exploratory Data Analysis
+
+```{r}
+filename1 <- 'pml-training.csv'
+filename2 <- 'pml-testing.csv'
+
+if (!file.exists(filename1) && !file.exists(filename2))
+{
+	download.file('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv', filename1, method='curl')
+	download.file('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv', filename2, method='curl')
+}
+
+training_full <- read.csv(filename1)
+testing <- read.csv(filename2)
+
+dim(training_full)
+dim(testing)
+str(training_full)
+```
+
+# Loading the necessary libraries
+
+```{r}
+library(caret)
+library(rattle)
+```
+
+# Cleaning the data
+
+Removing columns with missing or insufficient data:
+```{r}
+trainingClean <- training_full[,colSums(is.na(training_full) | training_full == '' | training_full == ' #DIV/0!') == 0]
+
+```
+
+Removing unnecessary variables:
+```{r}
+trainingClean <- trainingClean[,-c(1:7)] # removing metadata
+
+head(trainingClean, 2)
+```
+
+Factoring the `classe` variable:
+
+```{r}
+trainingClean$classe <- as.factor(trainingClean$classe)
+```
+
+# Partitioning the data
+
+Now, let's divide this training data further into training and validation subsets.
+
+```{r}
+set.seed(3314)
+inTrain <- createDataPartition(y=trainingClean$classe, p=.75, list=FALSE)
+training <- trainingClean[inTrain,]
+validation <- trainingClean[-inTrain,]
+
+dim(training)
+dim(validation)
+```
+
+# Adding parallel processing
+
+As training some of these models is likely to take a lot of time in computation, let's add parallel processing.
+
+```{r}
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+```
+
+# Creating the models
+
+Let's first set up the `trControl` variable for the `train` function.
+
+```{r}
+control <- trainControl(method='cv', number=5, verboseIter=F, allowParallel=T)
+```
+
+## Linear Discriminant Analysis
+
+```{r, cache=TRUE}
+# Model and prediction
+mod_lda <- train(classe ~ ., data=training, method='lda')
+pred_lda <- predict(mod_lda, validation)
+conf_lda <- confusionMatrix(pred_lda, validation$classe)
+
+# Confusion matrix
+conf_lda
+```
+
+## Decision trees
+
+```{r}
+mod_dt <- train(classe ~ ., data=training, method='rpart', trControl=control, tuneLength=6)
+fancyRpartPlot(mod_dt$finalModel)
+
+# Prediction
+pred_dt <- predict(mod_dt, validation)
+conf_dt <- confusionMatrix(pred_dt, validation$classe)
+
+# Confusion Matrix
+conf_dt
+```
+
+## Random Forests
+
+```{r, cache=TRUE}
+mod_rf <- train(classe ~ ., data=training, method='rf', trControl=control, tuneLength=6)
+
+# Prediction
+pred_rf <- predict(mod_rf, validation)
+conf_rf <- confusionMatrix(pred_rf, validation$classe)
+
+# Confusion Matrix
+conf_rf
+```
+
+## Models with their accuracy and out of sample error
+
+```{r, cache=TRUE}
+models <- c("Random Forest", "Linear Discriminant Analysis", "Decision Trees")
+accuracy <- c(conf_rf$overall[1], conf_lda$overall[1], conf_dt$overall[1])
+oos_err <- 1 - accuracy # out of sample error
+
+data.frame(Accuracy = accuracy, Out_of_Sample_Error = oos_err, row.names = models)
+```
+As we can see, the random forest model has the best accuracy or the least out of sample error. Let's use this model to predict the outcomes of the testing dataset.
+
+# Predicting the testing set
+
+```{r}
+pred_finalmodel <- predict(mod_rf, testing)
+
+pred_finalmodel
+```
+
+# De-register parallel processing cluster
+
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+```
